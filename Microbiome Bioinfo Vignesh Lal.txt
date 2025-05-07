@@ -1,0 +1,213 @@
+# Activate the environment
+> conda activate qiime2
+
+#Import the files into QIIME2 to create artifacts 
+qiime tools import \
+--type 'SampleData[PairedEndSequencesWithQuality]' \
+--input-path sequences \
+--input-format CasavaOneEightSingleLanePerSampleDirFmt \
+--output-path demux.qza
+
+#Visualization for the QIIME2 (all end in .qvz not .qva)
+qiime demux summarize \
+--i-data demux.qza \
+--o-visualization demux.qzv
+
+#Visualization will need to be done on the website demux.qzv
+
+#Trim and trunckade for a better quality usually above the score of 30. replace the X with the values you would want to start to truncade from or trim till. Denosing will get rid of any contamination. It also merges the forward and reverse reads and counts all the unique reads.
+qiime dada2 denoise-paired \
+--i-demultiplexed-seqs demux.qza \
+--p-trunc-len-f X \
+--p-trim-left-f X \
+--p-trunc-len-r X \
+--p-trim-left-r X \
+--o-representative-sequences rep-seqs.qza \
+--o-table table.qza \
+--o-denoising-stats stats.qza
+
+#Visualize and convert the .qza to a .qzv file
+qiime feature-table summarize \
+--i-table table.qza \
+--o-visualization table.qzv \
+--m-sample-metadata-file metadata.txt
+qiime feature-table tabulate-seqs \
+--i-data rep-seqs.qza \
+--o-visualization rep-seqs.qzv
+# Have the data be above 10,000 if not remember to view a filtered table later on where similar data will be displayed again. We will have the program ignore anything below where the numbers start to descrease in values. 
+
+#
+wget \
+  -O "gg-13-8-99-515-806-nb-classifier.qza" \
+  "https://data.qiime2.org/classifiers/sklearn-1.4.2/greengenes/gg-13-8-99-515-806-nb-classifier.qza"
+
+#We need to assign a taxonomy to the data
+qiime feature-classifier classify-sklearn \
+--i-classifier gg-13-8-99-515-806-nb-classifier.qza \
+--i-reads rep-seqs.qza \
+--o-classification taxonomy.qza
+
+#Visualize the taxonomy data
+qiime metadata tabulate \
+--m-input-file taxonomy.qza \
+--o-visualization taxonomy.qzv
+
+#When visualizing the data you might notice that there are other data that aren't the bacterias. We need to filter these out with the 16srRNA
+qiime taxa filter-table \
+--i-table table.qza \
+--i-taxonomy taxonomy.qza \
+--p-include p__ \
+--p-exclude mitochondria,chloroplast \
+--o-filtered-table table-with-phyla-no-mitochondria-chloroplast.qza
+
+qiime taxa filter-table \
+--i-table table-with-phyla-no-mitochondria-chloroplast.qza \
+--i-taxonomy taxonomy.qza \
+--p-exclude "k__Archaea" \
+--o-filtered-table table-with-phyla-no-mitochondria-chloroplasts-archaea.qza
+
+qiime taxa filter-table \
+--i-table table-with-phyla-no-mitochondria-chloroplasts-archaea.qza \
+--i-taxonomy taxonomy.qza \
+--p-exclude "k__Eukaryota" \
+--o-filtered-table table-with-phyla-no-mitochondria-chloroplasts-archaea-eukaryota.qza
+
+qiime taxa filter-seqs \
+--i-sequences rep-seqs.qza \
+--i-taxonomy taxonomy.qza \
+--p-include p__ \
+--p-exclude mitochondria,chloroplast \
+--o-filtered-sequences rep-seqs-with-phyla-no-mitochondria-chloroplast.qza
+
+qiime taxa filter-seqs \
+--i-sequences rep-seqs-with-phyla-no-mitochondria-chloroplast.qza \
+--i-taxonomy taxonomy.qza \
+--p-exclude "k__Archaea" \
+--o-filtered-sequences rep-seqs-with-phyla-no-mitochondria-chloroplasts-archaea.qza
+
+qiime taxa filter-seqs \
+--i-sequences rep-seqs-with-phyla-no-mitochondria-chloroplasts-archaea.qza \
+--i-taxonomy taxonomy.qza \
+--p-exclude "k__Eukaryota" \
+--o-filtered-sequences rep-seqs-with-phyla-no-mitochondria-chloroplasts-archaea-eukaryota.qza
+
+#Rename the files
+mv table-with-phyla-no-mitochondria-chloroplasts-archaea-eukaryota.qza filtered-table.qza
+mv rep-seqs-with-phyla-no-mitochondria-chloroplasts-archaea-eukaryota.qza filtered-rep-seqs.qza
+
+#Visualize the taxonomy again with the filtered data
+qiime taxa barplot \
+--i-table filtered-table.qza \
+--i-taxonomy taxonomy.qza \
+--m-metadata-file metadata.txt \
+--o-visualization taxa-bar-plots.qzv
+
+#We need to create a phylogeny tree but this data will use the alpha and the beta data for relatedness. The only problem is the phylogeny isn't based on a whole genome instead it will use the 16sRNA which is the identifier gene for bacteria and is enough to build a tree.
+qiime phylogeny align-to-tree-mafft-fasttree \
+--i-sequences filtered-rep-seqs.qza \
+--o-alignment aligned-rep-seqs.qza \
+--o-masked-alignment masked-aligned-rep-seqs.qza \
+--o-tree unrooted-tree.qza \
+--o-rooted-tree rooted-tree.qza
+
+#We need to normalize the reads since some might have been sequenced more and other might have been sequenced less. This will allow the program to compare uneven sequence depth. 
+qiime feature-table summarize \
+--i-table filtered-table.qza \
+--o-visualization filtered-table.qzv \
+--m-sample-metadata-file metadata.txt
+
+#We will need to view the data from the previous code and find the range at which we want the data to ignore the low quality data. This will be the highest low number we find before we reach a good quality data to use. The X will be the numbers to fill in from the table to ignore and anything below it.
+qiime diversity core-metrics-phylogenetic --i-phylogeny rooted-tree.qza --i-table filtered-table.qza --p-sampling-depth xxxxx --m-metadata-file metadata.txt --output-dir diversity-metrics-results
+
+#You will want to look at the pvalues of the two datas. The significance between them will explain a difference between datas. Anything lower than 0.05. The alpha diversity will explain the data for a ecosystem and the beta diversity will explain for within the community. 
+qiime diversity alpha-group-significance \
+--i-alpha-diversity diversity-metrics-results/observed_features_vector.qza \
+--m-metadata-file metadata.txt \
+--o-visualization diversity-metrics-results/observed-features-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+--i-alpha-diversity diversity-metrics-results/shannon_vector.qza \
+--m-metadata-file metadata.txt \
+--o-visualization diversity-metrics-results/shannon-group-significance.qzv
+
+#We can visualize the data for a Bray Curtis. The first command will be for the pairwise comparison and the second command if just to compare the datas. The X will be for the file names. For the comparison of the pairwise data use the qvalue. 
+qiime diversity beta-group-significance \
+--i-distance-matrix diversity-metrics-results/bray_curtis_distance_matrix.qza \
+--m-metadata-file metadata.txt \
+--m-metadata-column X \
+--o-visualization diversity-metrics-results/bray-curtis-life-stage-significance.qzv \
+--p-pairwise
+
+qiime diversity beta-group-significance \
+--i-distance-matrix diversity-metrics-results/bray_curtis_distance_matrix.qza \
+--m-metadata-file metadata.txt \
+--m-metadata-column X \
+--o-visualization diversity-metrics-results/bray-curtis-site-significance.qzv
+
+#Use the ANCOMBC program to compare the taxa that might be differently abundant based on the metadata provided. The X will represent the file names to change that you want to use.
+qiime composition ancombc \
+  --i-table filtered-table.qza \
+  --m-metadata-file metadata.txt \
+  --p-formula 'X' \
+  --o-differentials ancombc-X.qza
+
+qiime composition da-barplot \
+  --i-data ancombc-X.qza \
+  --p-significance-threshold 0.05 \
+  --o-visualization da-barplot-X.qzv
+
+From here are the answers to the worksheet!
+(All screenshots are included on the word document/pdf)
+1) Examine the metadata file. What columns do you see that you think might be useful for later when doing alpha and beta diversity metrics? HINT: there are 3
+# The columns that will be used will be 
+2) Include a screenshot of your interactive quality plot. Based on this plot, what values would you choose for --p-trunc-len and --p-trim-left for both the forward and reverse reads? Why have you chosen those numbers? HINT: If you trim and truncate too much, you will lose too many of your reads, making your downstream analysis not useful. Think about it scientifically and only trim and truncate where the overall quality averages below 25-30.
+# The truncking value I used was 249 and trimming of 50 for the forward reads and the reverse reads had a trunck of 190 and trim of 27. 
+
+3) Include a screenshot of the table summary from visualizing your table and a screenshot of the sequence length statistics from the rep-seqs file. Remember, we may eventually want to cut any samples with less than 10,000 reads. Do you see any in the interactive sample detail that might need to be cut? If so, which ones?
+# The value I choose for the program to ignore and below was the number 8,702 since everything above this number seemed too be good and I was advised that limiting too much can lead to low quality analysis for the data given.
+
+4) Once you have generated your taxonomy visualization, sort it by confidence. What are your top hits? What about if you sort by taxon? What hits do you see?
+# When sorted by the confidence there are two unassigned and when done again you can see the most being a top hit of k__Bacteria; p__Proteobacteria; c__Alphaproteobacteria; o__Sphingomonadales; f__Sphingomonadaceae; g__Sphingomonas; s__
+# When sorted by the taxa the unassigned had the most hits and the least hits were the k__Archaea; p__Crenarchaeota; c__Thaumarchaeota; o__Nitrososphaerales; f__Nitrososphaeraceae; g__Candidatus Nitrososphaera; s__gargensis
+
+5) When you visualize level 3 of taxonomy, what level is this? Do you see any trends as you sort by various metadata categories?
+# Most of them seem to be labeled as just bacteria.
+
+6) After visualizing your filtered-table.qzv, what cutoff value will you use for generating alpha and beta diversity? Why? Include a screenshot of the interactive sample view to help justify your reasoning. 
+# The number I used was 8,702 since anything lower than the 10,000 can be considered to be low quality data. You want to use a value thats small enough to include the majority of the data but not too large to cut off too many of the values that can be used.
+
+7) The first metric we will analyze is alpha diversity. In your own words, what is alpha diversity and what are the differences between the two types of alpha diversity we will analyze (Shannon and Observed features)?
+# Alpha diversity looks into the data for the whole ecosystem and the beta diversity uses data too look at a community. The difference is Shannon uses the data for a community and measures it while the Observed uses the measuring for a microbiome but more qualitatively. 
+
+8) Since you are looking at two metrics of diversity for 3 metadata categories, it would be helpful to make a table of the significance values. Are any of your comparisons significant? For one of the metadata data columns, there are actually 4 options. Include a screenshot of the pairwise comparisons for Shannon and Observed. Are there any significant comparisons? (HINT: look at the q value)
+There were not any significant comparisons between any of the groups. The easiest way to look at it was to view the values with the table for all the groups. Since all of the data showed that all groups had higher values than 0.05 we simply interpret it as having no significant difference. 
+
+10) For beta diversity, you will need to create visualizations for Bray Curtis dissimilarity and Weighted Unifrac distance. This will require your to modify the beta-group-significance code. You should have one visualization for each metadata column you are interested in. Include a screenshot of each visualization. Is there any significance? Regardless of significance, how can you interpret these results (hint: what is beta diversity looking at?) How are Bray Curtis dissimilarity and Weighted Unifrac distance different?
+Weighted Unifrac usually clusters similar or close similar relative as being the same and Bray Curtis doesn't do this. Yet they both look at community distributions. Looking at all the pvalues you can see that they are under the 0.05 value rang which means that within the communities there is a difference. 
+
+11) The core-metrics-phylogeny command generates a file called bray-curtis-emporer.qzv. Include 3 screenshots total (where the points are colored based on the metadata metrics). How do these results help you make sense of the results you got from question 10?
+Since the bray-Curtis dissimilarity doesn't count for certain difference between communities you can see that with less data the chart can be viewed as skewed. The resolve would be to get more better data for the calculation. 
+
+12) Using ANCOMBC, do you find any specific taxa that are differentially expressed with your three metadata categories? Please include a screenshot of any differentially expressed taxa and identify the species using the taxonomy.qzv file.
+For population
+The following are deplted while the reset are normal
+87d21276ff3358291693ca191828c2d2 which is labeled as k__Bacteria; p__Proteobacteria; c__Betaproteobacteria
+0ae008047883142d67204921f186a513 which is labeled as k__Bacteria; p__Firmicutes; c__Bacilli; o__Bacillales
+
+For sex
+The following is deleped while the reset are normal
+4c5e39ec93810f0d0b6b7c10c98d08ce which is labeled as k__Bacteria; p__Proteobacteria; c__Gammaproteobacteria
+
+For flock
+flockmigratorymale
+everything is labeled as depleted 
+flockresidentfemale
+The following is labeled as enriched while the rest are normal 
+c8e1c853f43965e7d283650bdd8ea592 which is labeled as k__Bacteria; p__Proteobacteria
+flockresidentmale
+The following is depleted while the rest normal
+87d21276ff3358291693ca191828c2d2 which is labeled as k__Bacteria; p__Proteobacteria; c__Betaproteobacteria
+0ae008047883142d67204921f186a513 which is labeled as k__Bacteria; p__Firmicutes; c__Bacilli; o__Bacillales
+4c5e39ec93810f0d0b6b7c10c98d08ce which is labeled as k__Bacteria; p__Proteobacteria; c__Gammaproteobacteria
+bc60d15e47cb30ad498a3772440a11c4 which is labeled as k__Bacteria; p__Bacteroidetes
+4edf8b6c017fb4a7a158180575622b8a which is labeled as k__Bacteria; p__Proteobacteria; c__Betaproteobacteria
